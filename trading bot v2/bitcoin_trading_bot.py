@@ -29,6 +29,17 @@ import json
 from typing import Dict, List, Tuple
 import logging
 
+# ANSI color codes for terminal output
+class Colors:
+    GREEN = '\033[92m'  # Green for BUY
+    RED = '\033[91m'    # Red for SELL
+    YELLOW = '\033[93m' # Yellow for HOLD
+    BLUE = '\033[94m'   # Blue for info
+    CYAN = '\033[96m'   # Cyan for highlights
+    WHITE = '\033[97m'  # White for normal text
+    BOLD = '\033[1m'    # Bold text
+    END = '\033[0m'     # Reset color
+
 class BitcoinTradingBot:
     def __init__(self, api_key: str = None, news_api_key: str = None, offline_mode: bool = False):
         """
@@ -334,6 +345,9 @@ class BitcoinTradingBot:
         if not market_analysis.get('signals'):
             return {'action': 'HOLD', 'amount': 0, 'reason': 'Insufficient market data'}
         
+        # Get timing estimates
+        timing = self.estimate_trade_timing(market_analysis)
+        
         # Get news sentiment
         news_sentiment = self.get_news_sentiment()
         
@@ -382,7 +396,8 @@ class BitcoinTradingBot:
             'current_price': market_analysis['current_price'],
             'reasons': reasons,
             'market_analysis': market_analysis,
-            'news_sentiment': news_sentiment
+            'news_sentiment': news_sentiment,
+            'timing_estimate': timing
         }
 
     def execute_trade(self, decision: Dict) -> Dict:
@@ -447,7 +462,73 @@ class BitcoinTradingBot:
         
         return {'status': 'Trade conditions not met', 'action': decision['action']}
 
-    def check_stop_loss_take_profit(self) -> Dict:
+    def estimate_trade_timing(self, market_analysis: Dict) -> Dict:
+        """
+        Estimate optimal timing for next trade based on market conditions
+        Returns estimated time ranges for BUY/SELL opportunities
+        """
+        current_rsi = market_analysis.get('rsi', 50)
+        volatility = market_analysis.get('volatility', 5)
+        
+        # Base timing estimates (in hours)
+        base_timing = {
+            'next_buy_opportunity': None,
+            'next_sell_opportunity': None,
+            'confidence': 'low'
+        }
+        
+        # RSI-based timing predictions
+        if current_rsi > 50:  # Moving toward overbought
+            hours_to_overbought = max(1, (70 - current_rsi) / 2)  # Rough estimate
+            base_timing['next_sell_opportunity'] = hours_to_overbought
+        
+        if current_rsi < 50:  # Moving toward oversold
+            hours_to_oversold = max(1, (current_rsi - 30) / 2)  # Rough estimate
+            base_timing['next_buy_opportunity'] = hours_to_oversold
+        
+        # Volatility adjustments
+        if volatility > 8:  # High volatility = faster moves
+            multiplier = 0.5
+            base_timing['confidence'] = 'high'
+        elif volatility < 3:  # Low volatility = slower moves
+            multiplier = 2.0
+            base_timing['confidence'] = 'low'
+        else:
+            multiplier = 1.0
+            base_timing['confidence'] = 'medium'
+        
+        # Apply volatility adjustment
+        if base_timing['next_buy_opportunity']:
+            base_timing['next_buy_opportunity'] *= multiplier
+        if base_timing['next_sell_opportunity']:
+            base_timing['next_sell_opportunity'] *= multiplier
+        
+        # Convert to time estimates
+        timing_result = {
+            'next_buy_opportunity': None,
+            'next_sell_opportunity': None,
+            'confidence': base_timing['confidence']
+        }
+        
+        if base_timing['next_buy_opportunity']:
+            hours = base_timing['next_buy_opportunity']
+            if hours < 1:
+                timing_result['next_buy_opportunity'] = f"{int(hours * 60)} minutes"
+            elif hours < 24:
+                timing_result['next_buy_opportunity'] = f"{hours:.1f} hours"
+            else:
+                timing_result['next_buy_opportunity'] = f"{hours/24:.1f} days"
+        
+        if base_timing['next_sell_opportunity']:
+            hours = base_timing['next_sell_opportunity']
+            if hours < 1:
+                timing_result['next_sell_opportunity'] = f"{int(hours * 60)} minutes"
+            elif hours < 24:
+                timing_result['next_sell_opportunity'] = f"{hours:.1f} hours"
+            else:
+                timing_result['next_sell_opportunity'] = f"{hours/24:.1f} days"
+        
+        return timing_result
         """Check if stop loss or take profit should be triggered"""
         if not self.trades or self.btc_holdings <= 0:
             return {'action': 'HOLD'}
@@ -592,21 +673,43 @@ class BitcoinTradingBot:
         }
 
     def display_status(self):
-        """Display current bot status"""
+        """Display current bot status with colors"""
         current_price_data = self.get_bitcoin_price()
         portfolio_value = self.get_portfolio_value()
         
         print("\n" + "="*50)
-        print("BITCOIN TRADING BOT STATUS")
+        print(f"{Colors.BOLD}{Colors.CYAN}BITCOIN TRADING BOT STATUS{Colors.END}")
         print("="*50)
-        print(f"Current BTC Price: ${current_price_data['price']:,.2f}")
-        print(f"24h Change: {current_price_data['change_24h']:+.2f}%")
-        print(f"Cash Balance: ${self.balance:,.2f}")
-        print(f"BTC Holdings: {self.btc_holdings:.6f} BTC")
-        print(f"Portfolio Value: ${portfolio_value:,.2f}")
-        print(f"Total Return: {((portfolio_value - 10000) / 10000) * 100:+.2f}%")
-        print(f"Current Position: {self.position}")
-        print(f"Total Trades: {len(self.trades)}")
+        print(f"{Colors.WHITE}Current BTC Price: {Colors.BOLD}${current_price_data['price']:,.2f}{Colors.END}")
+        
+        # Color code the 24h change
+        change = current_price_data['change_24h']
+        if change > 0:
+            print(f"{Colors.GREEN}24h Change: +{change:.2f}%{Colors.END}")
+        else:
+            print(f"{Colors.RED}24h Change: {change:.2f}%{Colors.END}")
+            
+        print(f"{Colors.WHITE}Cash Balance: ${self.balance:,.2f}{Colors.END}")
+        print(f"{Colors.WHITE}BTC Holdings: {self.btc_holdings:.6f} BTC{Colors.END}")
+        
+        # Color code portfolio performance
+        total_return = ((portfolio_value - 10000) / 10000) * 100
+        if total_return > 0:
+            print(f"{Colors.WHITE}Portfolio Value: {Colors.GREEN}${portfolio_value:,.2f}{Colors.END}")
+            print(f"{Colors.GREEN}Total Return: +{total_return:.2f}%{Colors.END}")
+        else:
+            print(f"{Colors.WHITE}Portfolio Value: {Colors.RED}${portfolio_value:,.2f}{Colors.END}")
+            print(f"{Colors.RED}Total Return: {total_return:.2f}%{Colors.END}")
+            
+        # Color code position
+        if self.position == 1:
+            print(f"{Colors.GREEN}Current Position: LONG{Colors.END}")
+        elif self.position == -1:
+            print(f"{Colors.RED}Current Position: SHORT{Colors.END}")
+        else:
+            print(f"{Colors.YELLOW}Current Position: NEUTRAL{Colors.END}")
+            
+        print(f"{Colors.WHITE}Total Trades: {len(self.trades)}{Colors.END}")
         print("="*50)
 
 
